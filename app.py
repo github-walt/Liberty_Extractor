@@ -33,7 +33,8 @@ st.markdown("""
 
 
 # Title and description
-st.title("🗽 Liberty Extractor: MedTech Intelligence")
+st.image("liberty_logo.png", width=200)
+st.title("🗽 Liberty_Extractor: MedTech Intelligence")
 st.markdown("Empowering MedTech professionals with autonomous insight—rooted in Liberty, powered by Groq.")
 
 
