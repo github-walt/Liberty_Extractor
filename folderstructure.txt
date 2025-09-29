@@ -1,0 +1,13 @@
+medtech-intel-extractor/
+├── app.py
+├── utils/
+│   └── groq_llm.py
+├── .streamlit/
+│   └── secrets.toml
+├── requirements.txt
+├── README.md
+└── .gitignore
+├── sources/
+│   ├── aggregator.py
+│   ├── newsapi_source.py
+│   └── medtechdive_scraper.py

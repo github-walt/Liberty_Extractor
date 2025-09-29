@@ -1,0 +1,486 @@
+--------------------------------------------------
+File: app.py
+--------------------------------------------------
+import streamlit as st
+from utils.groq_llm import query_groq
+from sources.aggregator import aggregate_articles
+
+st.set_page_config(page_title="MedTech Insight Extractor", layout="wide")
+
+# Title and description
+st.title("🧠 MedTech Insight Extractor")
+st.markdown("Search recent MedTech news and extract device insights using Groq LLM.")
+
+from sources.aggregator import aggregate_articles
+
+source_options = {
+    "NewsAPI only": ("newsapi",),
+    "ClinicalTrials.gov only": ("clinical_trials",),
+    "Aggregate all": ("newsapi", "clinical_trials", "openfda", "fiercepharma")
+}
+
+selected_source_label = st.sidebar.radio("🧭 Sources to use", list(source_options.keys()))
+selected_sources = source_options[selected_source_label]
+
+
+# Sidebar search
+with st.sidebar:
+    st.header("🔍 Search Articles")
+    user_query = st.text_input("Enter keyword", value="robotic surgery")
+    max_results = st.slider("Max articles per source", 5, 20, 10)
+    system_msg = st.text_input("System Prompt", value="Extract key device insights for MedTech sales teams.")
+    show_raw = st.checkbox("Show Raw LLM Output", value=False)
+
+# Aggregate articles
+articles = aggregate_articles(query=user_query, max_results=max_results, sources=selected_sources)
+titles = [f"{a['title']} ({a['source']})" for a in articles]
+selected_title = st.selectbox("📰 Choose an article", titles)
+
+# Display and extract
+selected_article = next((a for a in articles if f"{a['title']} ({a['source']})" == selected_title), None)
+if selected_article:
+    st.markdown(f"### {selected_article['title']}")
+    st.markdown(f"**Source:** {selected_article['source']}")
+    st.markdown(selected_article["summary"])
+    st.markdown(f"[Read full article]({selected_article['url']})")
+
+    if st.button("Extract Insights with Groq"):
+        with st.spinner("Querying Groq LLM…"):
+            result = query_groq(selected_article["summary"], system_message=system_msg)
+            if result:
+                st.success("✅ Insight Extracted")
+                st.markdown(result)
+                if show_raw:
+                    st.code(result)
+
+
+# Diagnostic transparency
+with st.expander("🧪 Diagnostic Logs"):
+    st.markdown("This section surfaces raw inputs and fallback logic.")
+    st.code(f"Search Query: {user_query}")
+    st.code(f"System Message: {system_msg}")
+    if selected_article:
+        st.code(f"Selected Article Summary:\n{selected_article['summary']}")
+
+source_counts = {}
+for a in articles:
+    source_counts[a["source"]] = source_counts.get(a["source"], 0) + 1
+
+st.code(f"Source Breakdown: {source_counts}")
+
+
+
+--------------------------------------------------
+File: folderstructure.txt
+--------------------------------------------------
+medtech-intel-extractor/
+├── app.py
+├── utils/
+│   └── groq_llm.py
+├── .streamlit/
+│   └── secrets.toml
+├── requirements.txt
+├── README.md
+└── .gitignore
+├── sources/
+│   ├── aggregator.py
+│   ├── newsapi_source.py
+│   └── medtechdive_scraper.py
+
+
+--------------------------------------------------
+File: MergedOutput2.txt
+--------------------------------------------------
+--------------------------------------------------
+File: groq_llm.py
+--------------------------------------------------
+import streamlit as st
+import requests
+
+GROQ_API_KEY = st.secrets["groq"]["api_key"]
+GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODEL = "llama-3.1-8b-instant"  # ✅ Correct model name
+
+def query_groq(prompt, system_message=None):
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    messages = []
+    if system_message:
+        messages.append({"role": "system", "content": system_message})
+    messages.append({"role": "user", "content": prompt})
+
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": messages,
+        "temperature": 0.7
+    }
+
+    try:
+        response = requests.post(GROQ_ENDPOINT, headers=headers, json=payload)
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"]
+    except requests.exceptions.HTTPError as e:
+        st.error("Groq API request failed.")
+        st.code(f"{e}\n\n{response.text}")
+        return None
+    except Exception as e:
+        st.error("Unexpected error.")
+        st.code(str(e))
+        return None
+
+
+
+--------------------------------------------------
+File: MergedOutput1.txt
+--------------------------------------------------
+--------------------------------------------------
+File: aggregator.py
+--------------------------------------------------
+from sources.newsapi_source import fetch_newsapi_articles
+from sources.medtechdive_scraper import fetch_medtechdive_articles
+
+def aggregate_articles(query="MedTech", max_results=10, sources=("newsapi", "fiercebiotech")):
+    articles = []
+
+    if "newsapi" in sources:
+        articles.extend(fetch_newsapi_articles(query=query, max_results=max_results))
+
+    if "clinical_trials" in sources:
+        from sources.clinical_trials_rss import fetch_clinical_trials_rss
+        articles.extend(fetch_clinical_trials_rss(max_results=max_results))
+
+    # Deduplicate by title
+    seen = set()
+    deduped = []
+    for a in articles:
+        if a["title"] not in seen:
+            deduped.append(a)
+            seen.add(a["title"])
+
+    deduped.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    return deduped
+
+
+
+--------------------------------------------------
+File: clinical_trials_rss.py
+--------------------------------------------------
+import streamlit as st
+import feedparser
+
+def fetch_clinical_trials_rss(max_results=5):
+    st.sidebar.write("🧪 ClinicalTrials.gov RSS triggered")
+
+    feed_url = "https://clinicaltrials.gov/ct2/results/rss.xml?cond=medical+device&recrs=a"
+    feed = feedparser.parse(feed_url)
+
+    if st.sidebar.checkbox("Show RSS Feed Metadata"):
+        st.expander("🧾 Feed Metadata").write({
+            "Title": feed.feed.get("title", ""),
+            "Link": feed.feed.get("link", ""),
+            "Description": feed.feed.get("description", ""),
+            "Entries": len(feed.entries)
+        })
+
+    results = []
+    seen_titles = set()
+
+    for entry in feed.entries:
+        title = entry.get("title", "").strip()
+        summary = entry.get("summary", "").strip()
+        link = entry.get("link", "")
+        published = entry.get("published", "")
+
+        if title and title not in seen_titles:
+            results.append({
+                "title": title,
+                "summary": summary,
+                "source": "ClinicalTrials.gov RSS",
+                "url": link,
+                "raw_text": "",
+                "timestamp": published
+            })
+            seen_titles.add(title)
+
+        if len(results) >= max_results:
+            break
+
+    if st.sidebar.checkbox("Show Matched Titles"):
+        st.expander("📰 Matched Titles").write([r["title"] for r in results])
+
+    return results
+
+
+
+--------------------------------------------------
+File: fiercebiotech_scraper.py
+--------------------------------------------------
+import streamlit as st
+import requests
+from bs4 import BeautifulSoup
+
+def fetch_fiercebiotech_articles(max_results=5):
+    url = "https://www.fiercebiotech.com/"
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/115.0.0.0 Safari/537.36"
+        )
+    }
+
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        print(response.status_code)  # Should be 200
+        print(response.text[:1000])  # Preview HTML
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        article_links = soup.select("h2.teaser-title a")[:max_results]
+
+        results = []
+        for a in article_links:
+            title = a.get_text(strip=True)
+            link = a["href"]
+            full_url = f"https://www.fiercebiotech.com{link}" if link.startswith("/") else link
+            results.append({
+                "title": title,
+                "summary": "Scraped from FierceBiotech homepage.",
+                "source": "FierceBiotech",
+                "url": full_url,
+                "raw_text": "",
+                "timestamp": ""
+            })
+        return results
+
+    except Exception as e:
+        st.error("FierceBiotech scraping failed.")
+        st.code(str(e))
+        return []
+
+
+
+--------------------------------------------------
+File: medtechdive_scraper.py
+--------------------------------------------------
+import streamlit as st
+import requests
+from bs4 import BeautifulSoup
+
+def fetch_medtechdive_articles(max_results=5):
+    url = "https://www.medtechdive.com/"
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        
+        if st.sidebar.checkbox("Show MedTechDive HTML Preview"):
+            st.expander("🔍 Raw HTML Preview").code(soup.prettify()[:1500])
+
+
+        # Updated selector based on current layout
+        article_links = soup.select("a.article-link")[:max_results]
+
+        results = []
+        for a in article_links:
+            title = a.get_text(strip=True)
+            link = a["href"]
+            full_url = f"https://www.medtechdive.com{link}" if link.startswith("/") else link
+            results.append({
+                "title": title,
+                "summary": "Scraped from MedTechDive homepage.",
+                "source": "MedTechDive",
+                "url": full_url,
+                "raw_text": "",
+                "timestamp": ""
+            })
+        return results
+
+    except Exception as e:
+        st.error("MedTechDive scraping failed.")
+        st.code(str(e))
+        return []
+
+
+
+--------------------------------------------------
+File: newsapi_source.py
+--------------------------------------------------
+import streamlit as st
+import requests
+
+NEWSAPI_KEY = st.secrets["newsapi"]["api_key"]
+NEWSAPI_ENDPOINT = "https://newsapi.org/v2/everything"
+
+def fetch_newsapi_articles(query="MedTech", max_results=10):
+    params = {
+        "q": query,
+        "sortBy": "publishedAt",
+        "language": "en",
+        "pageSize": max_results,
+        "apiKey": NEWSAPI_KEY
+    }
+    try:
+        response = requests.get(NEWSAPI_ENDPOINT, params=params)
+        response.raise_for_status()
+        articles = response.json().get("articles", [])
+        return [
+            {
+                "title": a["title"],
+                "summary": a["description"],
+                "source": "NewsAPI",
+                "url": a["url"],
+                "raw_text": a.get("content", ""),
+                "timestamp": a.get("publishedAt", "")
+            }
+            for a in articles
+        ]
+    except Exception as e:
+        st.error("NewsAPI failed.")
+        st.code(str(e))
+        return []
+
+
+
+--------------------------------------------------
+File: raps_rss.py
+--------------------------------------------------
+import streamlit as st
+import feedparser
+
+def fetch_raps_rss(max_results=5):
+    st.sidebar.write("🧪 RAPS RSS scraper triggered")
+
+    feed_url = "https://www.raps.org/rss-feeds/news-articles"
+    feed = feedparser.parse(feed_url)
+
+    if st.sidebar.checkbox("Show RSS Feed Metadata"):
+        st.expander("🧾 Feed Metadata").write({
+            "Title": feed.feed.get("title", ""),
+            "Link": feed.feed.get("link", ""),
+            "Description": feed.feed.get("description", ""),
+            "Entries": len(feed.entries)
+        })
+
+    results = []
+    seen_titles = set()
+
+    for entry in feed.entries:
+        title = entry.get("title", "").strip()
+        summary = entry.get("summary", "").strip()
+        link = entry.get("link", "")
+        published = entry.get("published", "")
+
+        if title and title not in seen_titles:
+            results.append({
+                "title": title,
+                "summary": summary,
+                "source": "RAPS RSS",
+                "url": link,
+                "raw_text": "",
+                "timestamp": published
+            })
+            seen_titles.add(title)
+
+        if len(results) >= max_results:
+            break
+
+    if st.sidebar.checkbox("Show Matched Titles"):
+        st.expander("📰 Matched Titles").write([r["title"] for r in results])
+
+    return results
+
+
+
+--------------------------------------------------
+File: raps_scraper.py
+--------------------------------------------------
+from playwright.sync_api import sync_playwright
+from bs4 import BeautifulSoup
+import streamlit as st
+
+def fetch_raps_articles(max_results=5):
+    st.sidebar.write("🧪 RAPS scraper triggered (Playwright)")
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page()
+            page.goto("https://www.raps.org/news-and-articles", timeout=15000)
+            page.wait_for_timeout(3000)  # wait for JS to load
+            content = page.content()
+            browser.close()
+
+        soup = BeautifulSoup(content, "html.parser")
+        article_links = soup.select("div.card-title a")[:max_results]
+
+        results = []
+        for a in article_links:
+            title = a.get_text(strip=True)
+            href = a["href"]
+            full_url = f"https://www.raps.org{href}" if href.startswith("/") else href
+            results.append({
+                "title": title,
+                "summary": "Scraped from RAPS homepage via Playwright.",
+                "source": "RAPS",
+                "url": full_url,
+                "raw_text": "",
+                "timestamp": ""
+            })
+
+        if st.sidebar.checkbox("Show Matched Titles"):
+            st.expander("📰 Matched Titles").write([r["title"] for r in results])
+
+        return results
+
+    except Exception as e:
+        st.error("RAPS Playwright scrape failed.")
+        st.code(str(e))
+        return []
+
+
+
+
+
+
+--------------------------------------------------
+File: newsapi.py
+--------------------------------------------------
+import streamlit as st
+import requests
+
+NEWSAPI_KEY = st.secrets["newsapi"]["api_key"]
+NEWSAPI_ENDPOINT = "https://newsapi.org/v2/everything"
+
+def fetch_medtech_articles(query="MedTech", max_results=10):
+    params = {
+        "q": query,
+        "sortBy": "publishedAt",
+        "language": "en",
+        "pageSize": max_results,
+        "apiKey": NEWSAPI_KEY
+    }
+    try:
+        response = requests.get(NEWSAPI_ENDPOINT, params=params)
+        response.raise_for_status()
+        articles = response.json().get("articles", [])
+        return [{"title": a["title"], "description": a["description"], "content": a.get("content", ""), "url": a["url"]} for a in articles]
+    except Exception as e:
+        st.error("Failed to fetch articles from NewsAPI.")
+        st.code(str(e))
+        return []
+
+
+
+
+
+
+--------------------------------------------------
+File: requirements.txt
+--------------------------------------------------
+Error reading file: Invalid procedure call or argument
+
+
