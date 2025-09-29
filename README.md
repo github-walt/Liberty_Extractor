@@ -14,3 +14,5 @@ A Streamlit app that uses Groq's llama-3.1-8b-instant model to extract insights 
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
+
+[![View in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://liberty-extractor.streamlit.app)
